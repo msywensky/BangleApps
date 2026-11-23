@@ -1,0 +1,24 @@
+{
+  "id": "iosfilter",
+  "name": "iOS Integration (Filtered)",
+  "shortName": "iOS Filter",
+  "version": "0.28",
+  "author": "gfwilliams (fork with app filter)",
+  "description": "Fork of the iOS Integration app. Show and dismiss iOS notifications, with an allow list / block list so only the apps you choose are shown on the watch.\n\nUninstall the original `iOS Integration` app first - both handle ANCS and must not be installed together.",
+  "icon": "app.png",
+  "tags": "tool,system,ios,apple,messages,notifications",
+  "dependencies": {"messages":"module", "mylocation":"app"},
+  "supports": ["BANGLEJS","BANGLEJS2"],
+  "readme": "README.md",
+  "storage": [
+    {"name":"iosfilter.app.js","url":"app.js"},
+    {"name":"iosfilter.img","url":"app-icon.js","evaluate":true},
+    {"name":"iosfilter.boot.js","url":"boot.js"},
+    {"name":"iosfilter.settings.js","url":"settings.js"}
+  ],
+  "data": [
+    {"name":"iosfilter.settings.json"},
+    {"name":"iosfilter.seen.json"}
+  ],
+  "sortorder": -8
+}

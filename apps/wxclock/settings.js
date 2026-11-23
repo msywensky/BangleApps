@@ -15,6 +15,10 @@
       format: v => v ? "\xB0C" : "\xB0F",
       onchange: v => { s.unitC = !!v; save(); }
     },
+    /*LANG*/"Sun & Moon": {
+      value: s.sun !== false,
+      onchange: v => { s.sun = v; save(); }
+    },
     /*LANG*/"Update (min)": {
       value: s.interval || 5, min: 1, max: 60, step: 1,
       onchange: v => { s.interval = v; save(); }

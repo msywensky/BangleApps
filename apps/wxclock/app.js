@@ -1,6 +1,7 @@
 /* Weather Clock - Bangle.js 2
-   Layout "Classic": big centred time, date, then weather icon + temperature.
-   Settings (wxclock.settings.json): hour24 (false), unitC (false), interval minutes (5), demo (false) */
+   Layout: time, date, a sunrise / moon phase / sunset strip, then weather icon + temperature.
+   Settings (wxclock.settings.json): hour24 (false), unitC (false), interval minutes (5), demo (false),
+   sun (true: show the sunrise / moon / sunset strip; false: original larger-time layout) */
 (function () {
   var SETTINGS_FILE = "wxclock.settings.json";
   var DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -13,8 +14,44 @@
       hour24: !!s.hour24,                       // default 12-hour
       unitC: !!s.unitC,                         // default Fahrenheit
       interval: Math.max(1, s.interval || 5),   // minutes between weather refreshes
-      demo: !!s.demo                            // cycle fake weather (for emulator testing)
+      demo: !!s.demo,                           // cycle fake weather (for emulator testing)
+      sun: s.sun !== false                      // sunrise / moon phase / sunset strip, default on
     };
+  }
+
+  // ---------- sun and moon ----------
+  // Worked out once per calendar day from the date and the location saved by the My Location app.
+  // The suncalc module is loaded only for that calculation and dropped again to free RAM.
+  var sunCache = null, sunKey = "";
+  function pad2(n) { return ("0" + n).slice(-2); }
+  function clockText(t) {
+    if (!t || isNaN(t.getTime())) return "--"; // no sunrise/sunset (polar day/night)
+    var h = t.getHours(), m = pad2(t.getMinutes());
+    if (S.hour24) return pad2(h) + ":" + m;
+    return (h % 12 || 12) + ":" + m + (h >= 12 ? "p" : "a");
+  }
+  function sunMoon(d) {
+    var key = d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate();
+    if (sunCache && sunKey === key) return sunCache;
+    var res = { rise: "--", set: "--", illum: 0, litRight: true };
+    try {
+      var loc = require("Storage").readJSON("mylocation.json", 1) || {};
+      if (S.demo && typeof loc.lat !== "number") loc = { lat: 40.7, lon: -74 }; // so the emulator shows something
+      var SunCalc = require("suncalc");
+      var mi = SunCalc.getMoonIllumination(d), north = !(loc.lat < 0);
+      res.illum = mi.fraction;
+      // phase < 0.5 is waxing. Waxing shows the lit side on the right in the northern hemisphere, left in the south.
+      res.litRight = (mi.phase < 0.5) === north;
+      if (typeof loc.lat === "number" && typeof loc.lon === "number") {
+        var t = SunCalc.getTimes(d, loc.lat, loc.lon);
+        res.rise = clockText(t.sunrise);
+        res.set = clockText(t.sunset);
+      }
+    } catch (e) { /* leave the "--" placeholders */ }
+    try { Modules.removeCached("suncalc"); } catch (e) { /* not cached, or not supported */ }
+    sunKey = key;
+    sunCache = res;
+    return res;
   }
 
   // ---------- weather ----------
@@ -71,7 +108,7 @@
   // Colours follow the watch theme. fg/bg come from g.theme; accents are chosen so they
   // stay readable on the background (cyan on dark themes, blue on light ones).
   var YELLOW = "#ff0";
-  var T = { fg: "#fff", bg: "#000", dark: true, accent: "#0ff" };
+  var T = { fg: "#fff", bg: "#000", dark: true, accent: "#0ff", sun: YELLOW, moonLit: "#fff", moonDark: "#333" };
   function loadTheme() {
     var th = g.theme || {};
     var dark = th.dark !== undefined ? !!th.dark : true;
@@ -79,8 +116,43 @@
       fg: th.fg !== undefined ? th.fg : (dark ? "#fff" : "#000"),
       bg: th.bg !== undefined ? th.bg : (dark ? "#000" : "#fff"),
       dark: dark,
-      accent: dark ? "#0ff" : "#00f"
+      accent: dark ? "#0ff" : "#00f",
+      sun: dark ? YELLOW : "#f80",             // amber: yellow vanishes on white
+      moonLit: dark ? "#fff" : "#f80",
+      moonDark: dark ? "#333" : "#ccc"
     };
+  }
+
+  // small filled triangle: up = sunrise, down = sunset
+  function tri(x, y, up) {
+    g.setColor(T.sun).fillPoly(up
+      ? [x, y - 4, x - 4, y + 3, x + 4, y + 3]
+      : [x, y + 4, x - 4, y - 3, x + 4, y - 3]);
+  }
+  // moon disc, f = fraction lit (0..1). Drawn row by row: the lit part runs from the terminator to the limb.
+  function moon(x, y, r, f, litRight) {
+    g.setColor(T.moonDark).fillCircle(x, y, r);
+    g.setColor(T.moonLit);
+    for (var dy = -r; dy <= r; dy++) {
+      var w = Math.sqrt(r * r - dy * dy), xt = (1 - 2 * f) * w;
+      var x1 = Math.round(litRight ? xt : -w), x2 = Math.round(litRight ? w : -xt);
+      if (x2 > x1) g.fillRect(x + x1, y + dy, x + x2, y + dy);
+    }
+    g.setColor(T.fg).drawCircle(x, y, r);
+  }
+  var SUN_Y = 109;
+  function drawSun(d, cx) {
+    var m = sunMoon(d), size = 14;
+    for (; size > 11; size--) { // shrink so "10:52a" and the moon do not collide
+      g.setFont("Vector", size);
+      if (Math.max(g.stringWidth(m.rise), g.stringWidth(m.set)) <= 38) break;
+    }
+    g.setFont("Vector", size).setColor(T.fg);
+    g.setFontAlign(-1, 0).drawString(m.rise, 36, SUN_Y);
+    g.setFontAlign(1, 0).drawString(m.set, 140, SUN_Y);
+    tri(30, SUN_Y, true);
+    tri(146, SUN_Y, false);
+    moon(cx, SUN_Y, 9, m.illum, m.litRight);
   }
 
   function cloud(ox, oy, s, dy) {
@@ -143,20 +215,26 @@
     loadTheme();
     g.reset().clearRect(R.x, R.y, R.x2, R.y2); // reset() = theme fg/bg, so this clears to the theme background
 
+    // with the sun strip the time is smaller and sits higher to make room
+    var L = S.sun ? { size: 44, min: 32, ty: 54, dy: 87, wy: 130 } : { size: 56, min: 40, ty: 84, dy: 114, wy: 129 };
+
     // time (+ AM/PM): shrink the font until the whole group fits
-    var size = 56, tw, aw = 0, gap = 4;
-    for (; size >= 40; size -= 4) {
+    var size = L.size, tw, aw = 0, gap = 4;
+    for (; size >= L.min; size -= 4) {
       g.setFont("Vector", size);
       tw = g.stringWidth(tp.t);
       if (tp.ap) { g.setFont("Vector", 18); aw = g.stringWidth(tp.ap); }
       if (tw + (tp.ap ? gap + aw : 0) <= W - 8) break;
     }
     var x0 = cx - (tw + (tp.ap ? gap + aw : 0)) / 2;
-    g.setFontAlign(-1, 0).setColor(T.fg).setFont("Vector", size).drawString(tp.t, x0, 84);
-    if (tp.ap) g.setColor(T.accent).setFont("Vector", 18).drawString(tp.ap, x0 + tw + gap, 94);
+    g.setFontAlign(-1, 0).setColor(T.fg).setFont("Vector", size).drawString(tp.t, x0, L.ty);
+    if (tp.ap) g.setColor(T.accent).setFont("Vector", 18).drawString(tp.ap, x0 + tw + gap, L.ty + Math.round(size * 0.18));
 
     // date
-    g.setFontAlign(0, 0).setColor(T.accent).setFont("Vector", 20).drawString(dateText(d), cx, 114);
+    g.setFontAlign(0, 0).setColor(T.accent).setFont("Vector", 20).drawString(dateText(d), cx, L.dy);
+
+    // sunrise / moon phase / sunset
+    if (S.sun) drawSun(d, cx);
 
     // divider
     g.setColor(T.fg).drawLine(24, 126, W - 24, 126);
@@ -168,11 +246,11 @@
     g.setFont("Vector", 14);
     var uw = g.stringWidth(unit), degW = 8;
     var rowW = ICON + 8 + nw + 2 + degW + uw, rx = cx - rowW / 2;
-    if (w) icon(category(w), rx, 129, ICON);
+    if (w) icon(category(w), rx, L.wy, ICON);
     var nx = rx + ICON + 8;
-    g.setFontAlign(-1, 0).setColor(T.fg).setFont("Vector", 32).drawString(numStr, nx, 150);
-    g.drawCircle(nx + nw + 5, 141, 2); // degree sign
-    g.setFont("Vector", 14).drawString(unit, nx + nw + 2 + degW, 143);
+    g.setFontAlign(-1, 0).setColor(T.fg).setFont("Vector", 32).drawString(numStr, nx, L.wy + 21);
+    g.drawCircle(nx + nw + 5, L.wy + 12, 2); // degree sign
+    g.setFont("Vector", 14).drawString(unit, nx + nw + 2 + degW, L.wy + 14);
 
     queueDraw();
   }
